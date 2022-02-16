@@ -193,10 +193,12 @@ sub itemInformation {
        $sip_out->{circulation_status}='00';#undefined return value
        if ( $item_info->{z30} ) {
          my ($ips)=$item_info->{z30}->{'z30-item-process-status'};
-         my @ips_match = grep(/^\Q$ips\E$/, @in_process_status);
-         if (scalar @ips_match > 0 ) { $sip_out->{circulation_status}='06'; } #in process
-         my @miss_match = grep(/^\Q$ips\E$/, @missing_status);
-         if (scalar @miss_match > 0 ) { $sip_out->{circulation_status}='12'; } #lost
+         if ($ips) {
+            my @ips_match = grep(/^\Q$ips\E$/, @in_process_status);
+            if (scalar @ips_match > 0 ) { $sip_out->{circulation_status}='06'; } #in process
+            my @miss_match = grep(/^\Q$ips\E$/, @missing_status);
+            if (scalar @miss_match > 0 ) { $sip_out->{circulation_status}='12'; } #lost
+            }
          }
        if ( $sip_out->{circulation_status} eq '00' and $loan_info->{'z36'} ) { #reposne has loan record
          if ( $loan_info->{'z36'}->{'z36-bor-status'} eq $transfer_patron ) { #in transit loan
