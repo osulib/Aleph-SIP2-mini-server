@@ -8,9 +8,13 @@ It accepts SIP2 requests. Than calls ALEPH API (X-SERVER) that is used for gathe
 
 NOTE
 Currently only few SIP2 are supported:
-17/18 Item Information
+17/18 Item Information  
+  supported circulation statuses in reponse:  3 - available (not loaned), 4 - charged (on regular loan), 6 - in process (on base of defined item process statuses), 10 - in transit between libraries (on base of defined patron status(es) for transfer patrons), 13 - missing (on base of defined item process statuses)
 98/99 SCP (Aleph) status
-93/94 login 
+
+93/94 login (does not require real login, always response as ok)
+
+
 --The other can be implemented by adding new subs that will also call Aleph API and process the request
 
 IMPLEMENTATION
