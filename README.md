@@ -1,5 +1,5 @@
 # Aleph-SIP2-mini-server
-SIP2 server solution, with limited services, suitable for RFID HF security gates etc.
+SIP2 server solution, with limited services, suitable for RFID UHF security gates etc.
 
 
 The script should be run on background, ideally on boot using crontab. It has infite loop that listens of defined port.
