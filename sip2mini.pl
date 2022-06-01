@@ -43,16 +43,16 @@ $| = 1;
 my $listenOnPort='5330'; #Port, where SIP2 server listens
 my $add_checksum='0'; #if true, the ACS responsed will also contain AY field with sequence number (always "1" value) and AZ field with checksum #TODO to be tested yet
 my $adm_base="osu50"; #lower case
-my $xserver_url="https://katalog.osu.cz/X"; #URL of th x-server
+my $xserver_url="https://aleph.library.no/X"; #URL of th x-server
 my $ill_item_by_bc_user=""; #aleph user with privilegies to Xserver service ill-item-by-bc. Leave empty, if the service is available without user/password (as www-x user)
 my $ill_item_by_bc_pas=""; #the same - password
-my $ill_loan_info_user="X-LOAN-INF"; #aleph user with privilegies to Xserver service ill-loan-info. Leave empty, if the service is available without user/password (as www-x user)
-my $ill_loan_info_pas="W2sfD8PGqP"; #the same - password
+my $ill_loan_info_user="loanThief"; #aleph user with privilegies to Xserver service ill-loan-info. Leave empty, if the service is available without user/password (as www-x user)
+my $ill_loan_info_pas="1got2loans"; #the same - password
 my $transfer_patron='transfer patron'; #name of the patron status used for transfer between l;ibrary departments ($data_tab/pc_teb_extended.eng - BOR-STATUS)
 my @in_process_status=('IP','RE'); #item process statuses (codes) as defined in Aleph for in process (returns SIP2 circulation_status 06 - in process. It is array - more codes can be defined here
 my @missing_status=('MI','MP','MR','VY'); #item process statuses (codes) as defined in Aleph for missing/lost items - returns SIP2 circulation_status 12 - lost. It is array - more codes can be defined here
 my $log='/exlibris/aleph/matyas/sip2/sip2mini.log'; #for writing registrations, alerts and errors
-my $admin_mail='matyas.bajger@osu.cz'; #for sending errors etc.
+my $admin_mail='superlibrarian@library.no'; #for sending errors etc.
 my $debug='0'; #debug mode, sends all registrations to admin_email, not just erros
 
 
