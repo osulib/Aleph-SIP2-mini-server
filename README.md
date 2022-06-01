@@ -34,5 +34,8 @@ I2: For item information request/response (17/18), the item is not checked for h
 
 Dependencies: Perl of the Aleph distribution, Aleph min. ver. 18 with X-Server
 
+TIP: Try SIP2 Windows graphic testing tool available at https://clcohio.org/sip-testing-tool/
+
 Made by Matyas F. Bajger, University of Ostrava, University Library, February 2022
 GNU GPL Licence
+
