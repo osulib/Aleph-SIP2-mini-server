@@ -16,6 +16,11 @@
 #To run on background with stderr redirect to log file run:
 #	nohup sip2mini.pl '2>&1' &
 #
+#
+#Requirements:	Perl from Aleph distribution, without extra modules
+#		X-Server Aleph: following API services must be granted to general WWW-X user to access in your ADM base: ill-item-by-bc, ill-get-doc-short 
+#											lll-loan-info is also used, but protected by password set below
+#
 ##by Matyas Bajger, library.osu.eu, 2022, GNU GPL License
 ##
 #
@@ -26,10 +31,14 @@ use warnings;
 use utf8;
 binmode(STDOUT, ":utf8");
 binmode(STDIN, ":utf8");
+use open qw( :std :encoding(UTF-8) ); #thhis
+use Encode 'encode'; #thhis
 use IO::Socket;
+use Socket;
 use URI::Escape;
 use LWP;
 use XML::Simple;
+use Switch;
 use CGI;
 use Switch;
 use POSIX qw/strftime/;
@@ -38,26 +47,30 @@ use Data::Dumper;
 # Execute anytime before the <STDIN>.
 # # Causes the currently selected handle to be flushed immediately and after every print.
 $| = 1;
+use IO::Handle;
+STDOUT->autoflush(1);
+LOGFILE->autoflush(1);
 
 #initial variables
 my $listenOnPort='5330'; #Port, where SIP2 server listens
 my $add_checksum='0'; #if true, the ACS responsed will also contain AY field with sequence number (always "1" value) and AZ field with checksum #TODO to be tested yet
 my $adm_base="osu50"; #lower case
-my $xserver_url="https://aleph.library.no/X"; #URL of th x-server
+my $xserver_url="https://katalog.osu.cz/X"; #URL of th x-server
 my $ill_item_by_bc_user=""; #aleph user with privilegies to Xserver service ill-item-by-bc. Leave empty, if the service is available without user/password (as www-x user)
 my $ill_item_by_bc_pas=""; #the same - password
-my $ill_loan_info_user="loanThief"; #aleph user with privilegies to Xserver service ill-loan-info. Leave empty, if the service is available without user/password (as www-x user)
-my $ill_loan_info_pas="1got2loans"; #the same - password
+my $ill_loan_info_user="X-LOAN-INF"; #aleph user with privilegies to Xserver service ill-loan-info. Leave empty, if the service is available without user/password (as www-x user)
+my $ill_loan_info_pas="W2sfD8PGqP"; #the same - password
 my $transfer_patron='transfer patron'; #name of the patron status used for transfer between l;ibrary departments ($data_tab/pc_teb_extended.eng - BOR-STATUS)
 my @in_process_status=('IP','RE'); #item process statuses (codes) as defined in Aleph for in process (returns SIP2 circulation_status 06 - in process. It is array - more codes can be defined here
 my @missing_status=('MI','MP','MR','VY'); #item process statuses (codes) as defined in Aleph for missing/lost items - returns SIP2 circulation_status 12 - lost. It is array - more codes can be defined here
 my $log='/exlibris/aleph/matyas/sip2/sip2mini.log'; #for writing registrations, alerts and errors
-my $admin_mail='superlibrarian@library.no'; #for sending errors etc.
+my $admin_mail='matyas.bajger@osu.cz'; #for sending errors etc.
 my $debug='0'; #debug mode, sends all registrations to admin_email, not just erros
 
 
 our $sip_in={}; our $sip_out={}; our $aapi_in={}; our $aapi_out={}; our $now;
 unless ( open ( LOGFILE, ">>$log" ) ) {print "Error - cannot open log file $log\n"; }
+binmode(LOGFILE, ":utf8");
 
 $now=strftime "%Y%m%d-%H:%M:%S", localtime;
 print LOGFILE "START - $now\n";
@@ -80,39 +93,87 @@ my $socket = new IO::Socket::INET (
         LocalHost => 'aleph.osu.cz',
         LocalPort => $listenOnPort,
         Proto => 'tcp',
-        Listen => 1,
-        Reuse => 1,
+        Listen => SOMAXCONN,
+       Reuse => 1
 );
+#setsockopt($socket, SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT, SO_KEEPALIVE, 1);
+setsockopt($socket, SOL_SOCKET, SO_KEEPALIVE, 1);
+$socket->autoflush(1);
+
 exceptionError ("Could not create socket: $!n") unless $socket;
 print LOGFILE "Waiting for data from the client end, listening on port $listenOnPort ...\n";
- 
+
+my $new_socket;
+my $full_message=''; 
 
 #infinte loop 
 while(1) {
-   my $client;
-   my $new_socket = $socket->accept($client);
-   my $message_from_client='';
-   my $sip_response='no_response';
-   $new_socket->recv($message_from_client,1024);
-   $message_from_client =~ s/\n//g; $message_from_client =~ s/\r//g;
-#   my($iport,$iaddr) = sockaddr_in($new_socket); #asas
-#   my $iname = gethostbyaddr($iaddr,AF_INET); #asas
-   my ($iaddr) = $new_socket->peerhost; #asas
-   $now=strftime "%Y%m%d-%H:%M:%S", localtime;
-   print LOGFILE "$now - $iaddr - Incoming message $message_from_client\n";
-#   print LOGFILE "$now - Incoming message $message_from_client\n";
-   #print "hello $message_from_client\n";  #toto vypise na stdout, musi se vypsat do socketu k tomu slouzi $new_socket->send(
-   my $service=substr( $message_from_client, 0, 2);
-   if ($service eq '17') { $sip_response = itemInformation($message_from_client); }
-   elsif ($service eq '93') { $sip_response = ACSlogin($message_from_client); }
-   elsif ($service eq '99') { $sip_response = ACSstatus($message_from_client); }
-   else { exceptionError('SIP2 mini currently processes only 17-request/18-reponse (loan info), 98/99 (status), 93/94 (login), other request types are not supported, received service: '."$service");}
-   if ($add_checksum) { #add checksum
-      $sip_response .= 'AY1AZ'.countChecksum($sip_response);
+#if ( $new_socket ) {print "connected ".$new_socket->connected ."\n";} #TODO DEBUG
+   unless ($new_socket) { #new connection
+      $new_socket = $socket->accept();  
       }
-   $new_socket->send("$sip_response\n") ; 
+
+   my $message_from_client='';
+   $new_socket->recv($message_from_client,1024);
+
+   if ( length($message_from_client)==0 ) { #when socket is open and no message is comming, the recv message may be treated as existing but zero length, start new listening
+      $new_socket = $socket->accept();  
+      }
+
+
+   my $sip_response='no_response';
+my $client_address = $new_socket->peerhost() ? $new_socket->peerhost() : 'unknown_host' ;
+my $client_port = $new_socket->peerport() ? $new_socket->peerport() : 'unknown_port';
+print "connection from $client_address:$client_port\n";
+   #20220620
+   if (! $new_socket) {
+      redo if $!{ECONNREFUSED};  # Error from a previous UDP send
+      exceptionError('error when receiving '.$!."\n");
+      }   
+
+print "debug message_from_client is  $message_from_client\n";
+print "debug ord message_from_client is ".ord($message_from_client)."\n\n";
+print "debug length is ".length($message_from_client)."\n\n";
+
+   
+   
+#   if ( ord($message_from_client)==13 or ord($message_from_client)==11 or length($message_from_client) > 1  or length($message_from_client) == 0 ) { #got enter from socket or accepted whole message together (has more than 1 char)
+   if ( ord($message_from_client)==13 or ord($message_from_client)==11 or length($message_from_client) > 1  ) { #got enter from socket or accepted whole message together (has more than 1 char)
+      if ( length($message_from_client) > 1 ) { $full_message=$message_from_client;}
+      $full_message =~ s/[\n\r]//g;
+print "GOT FULL MESSAGE $full_message\n"; #DEBUG
+#      if ( length($full_message)==0 ) {
+#         print "WARNING full_message from socket has zero length\n"; #TODO toto do logu
+#         next;
+#         }
+      #my($iport,$iaddr) = sockaddr_in($new_socket);
+      #my $iname = gethostbyaddr($iaddr,AF_INET);
+      my $iaddr = $new_socket->peerhost ? $new_socket->peerhost : 'unknown ip';
+      $now=strftime "%Y%m%d-%H:%M:%S", localtime;
+      print LOGFILE "$now - $iaddr - Incoming message $full_message\n";
+print "$now - $iaddr - Incoming message $full_message\n";
+print "full_message has length ".length($full_message)."\n";
+      my $service=substr( $full_message, 0, 2);
+print "service is $service\n";
+      if ($service eq '17') { $sip_response = itemInformation($full_message); }
+      elsif ($service eq '93') { $sip_response = ACSlogin($full_message); }
+      elsif ($service eq '99') { $sip_response = ACSstatus($full_message); }
+      else { exceptionError('SIP2 mini currently processes only 17-request/18-reponse (loan info), 98/99 (status), 93/94 (login), other request types are not supported, received service: '."$service");}
+      if ($add_checksum) { #add checksum
+         $sip_response .= 'AY1AZ'.countChecksum($sip_response);
+         }
+      print LOGFILE "response:\n$sip_response\n\n";
+      my $sip_response_bytes = encode('UTF-8', $sip_response);
+      #$new_socket->send("$sip_response") ;
+      $new_socket->send("$sip_response_bytes") ;
+      $full_message=''; 
+      }
+   else {
+      $full_message .= $message_from_client;
+print "full_message is $full_message\n";
+      }
    }
-close($socket);
+$socket->close;
 
 #sub for processing 17 - Item information request and returning 18
 #17/18 Item Information
@@ -151,10 +212,10 @@ sub itemInformation {
                                          #                               10 in treansit between library locations, 11 claimed returned, 12 lost, 13 missing
                                          # Note - here currently onlu the 2 statuses are used: 4 - loaned, 3 - not loaned !!!
    $sip_out->{security_marker}='00';  #two chars. The values are 00-other, 01-none, 02-3M Tattle-Tape Security Strip, 03-3M Whisper Tape
-   $sip_out->{fee_type}='00';  #two chars
+   $sip_out->{fee_type}='01';  #two chars
    $sip_out->{datetime} = strftime "%Y%m%d    %H%M%S", localtime;
    $sip_out->{barcode} = 'AB'.$sip_in->{barcode}.'|' ;# prefix AB
-   $sip_out->{title} = '';# prefix AJ, z volanych api ovsem nelze zjistit
+   $sip_out->{title} = '';# prefix AJ, 
    $sip_out->{due_date} = '';# prefix AH
    $sip_out->{permament_location} = '';# prefix AQ
    $sip_out->{screen_message} = '';# prefix AF, hlaseni pro uzivate;e
@@ -169,56 +230,92 @@ sub itemInformation {
          $ibc->{'user_name'}=$ill_item_by_bc_user if ($ill_item_by_bc_user);
          $ibc->{'user_password'}=$ill_item_by_bc_pas if ($ill_item_by_bc_pas);
       my $item_info = callXserver($ibc);
-      unless ( $item_info ) { $is_error='Response of X-server for request ill-item-by-bc is empty'; exceptionError($is_error); }
+      unless ( $item_info ) { 
+         $is_error='Response of X-server for request ill-item-by-bc is empty'; 
+         $sip_out->{title}="Nelze se pripojit k API Alephu.";
+         exceptionError($is_error); 
+         }
       if ( not($item_info->{z30}->{'z30-doc-number'}) and not($item_info->{z30}->{'z30-item-sequence'}) )  {
          $is_error='Response of X-server for request ill-item-by-bc does not contain /z30/z30-doc-number element. Item key cannot be determined.';
+         $sip_out->{title}="Jednotka s kodem ".$sip_in->{barcode}." nenalezena";
          exceptionError($is_error);
          }
+      if ( $is_error ) {
+         print LOGFILE "Response message 18 error found - returning circulation status 01\n";
+         $sip_out->{'circulation_status'}='01'; 
+         }
       else {
-      #call API ill-loan-info
-       my $lic={};
+         #get title - call API ill-get-doc-short 20220608
+         my $gds={};
+         $gds->{op}='ill-get-doc-short';
+         $gds->{'doc_number'} = sprintf("%09d",$item_info->{z30}->{'z30-doc-number'});
+         $gds->{'library'}=$adm_base;
+         my $doc_short = callXserver($gds);
+         if ( $doc_short ) {  
+            if ( $doc_short->{z13}->{'z13-title'} ) { 
+               $sip_out->{title} = $doc_short->{z13}->{'z13-title'};
+               #$sip_out->{title} = 'Ukradena kniha';
+               $sip_out->{title} =~ s/\s*[:\/\.,]$//;
+               }
+            else {
+               print LOGFILE "WARNING - X-Server API ill-get-doc-short - no /z13/z13-title found in response -  Item title cannot be determined.\n";
+               $sip_out->{title} = 'Ukradena kniha';
+               }
+            }
+         else {
+            print LOGFILE "WARNING - X-Server API ill-get-doc-short returned no or errorneous response -  Item title cannot be determined.\n";
+            $sip_out->{title} = $sip_out->{title} ? $sip_out->{title} : 'Ukradena kniha';
+            }
+
+         #call API ill-loan-info
+         my $lic={};
          $lic->{op}='ill-loan-info';
          $lic->{'doc_number'} = sprintf("%09d",$item_info->{z30}->{'z30-doc-number'});
          $lic->{'item_seq'} = sprintf("%06d",$item_info->{z30}->{'z30-item-sequence'});
          $lic->{'library'}=$adm_base;
          $lic->{'user_name'}=$ill_loan_info_user if ($ill_loan_info_user);
          $lic->{'user_password'}=$ill_loan_info_pas if ($ill_loan_info_pas);
-       my $loan_info = callXserver($lic);
-       unless ( $loan_info ) { $is_error='Response of X-server for request ill-loan-info is empty'; exceptionError($is_error); }
-       #gather data for sip response
-       #TODO ciruclation_status 08 je on hold shelf, we would need another api call to get information about the hold request
-       #11 claimed returned
-       #12 lost
-       #13 missing
-       $sip_out->{circulation_status}='00';#undefined return value
-       if ( $item_info->{z30} ) {
-         my ($ips)=$item_info->{z30}->{'z30-item-process-status'};
-         if ($ips) {
-            my @ips_match = grep(/^\Q$ips\E$/, @in_process_status);
-            if (scalar @ips_match > 0 ) { $sip_out->{circulation_status}='06'; } #in process
-            my @miss_match = grep(/^\Q$ips\E$/, @missing_status);
-            if (scalar @miss_match > 0 ) { $sip_out->{circulation_status}='12'; } #lost
-            }
-         }
-       if ( $sip_out->{circulation_status} eq '00' and $loan_info->{'z36'} ) { #reposne has loan record
-         if ( $loan_info->{'z36'}->{'z36-bor-status'} eq $transfer_patron ) { #in transit loan
-            $sip_out->{circulation_status}='10';}
-         else { #loaned
-            $sip_out->{circulation_status}='04';
-            if ( $loan_info->{'z36'}->{'z36-due-date'} ) {
-               my $dd=$loan_info->{'z36'}->{'z36-due-date'};
-               $sip_out->{due_date} = 'AH'.substr($dd,6,4).substr($dd,3,2).substr($dd,0,2).'|';
+           my $loan_info = callXserver($lic);
+           unless ( $loan_info ) { $is_error='Response of X-server for request ill-loan-info is empty'; exceptionError($is_error); }
+       
+          #gather data for sip response
+          #TODO ciruclation_status 08 je on hold shelf, we would need another api call to get information about the hold request
+          #11 claimed returned
+          #12 lost
+          #13 missing
+          $sip_out->{circulation_status}='00';#undefined return value
+          if ( $item_info->{z30} ) {
+            my ($ips)=$item_info->{z30}->{'z30-item-process-status'};
+            if ($ips) {
+               my @ips_match = grep(/^\Q$ips\E$/, @in_process_status);
+               if (scalar @ips_match > 0 ) { $sip_out->{circulation_status}='06'; } #in process
+               my @miss_match = grep(/^\Q$ips\E$/, @missing_status);
+               if (scalar @miss_match > 0 ) { $sip_out->{circulation_status}='12'; } #lost
                }
             }
-          }
-       elsif ( $is_error ) { #an error occured during processing, return circulation_status 01 - other
-         $sip_out->{'circulation_status'}='01'; }
-       else { $sip_out->{'circulation_status'}='03'; } #available
-       $sip_out->{datetime} = strftime "%Y%m%d    %H%M%S", localtime;
-       $sip_out->{permament_location} = 'AQ'.$item_info->{'z30'}->{'z30-collection'}.'|' if ( $item_info->{'z30'}->{'z30-collection'} ) ;
-       #construct and return SIP response
-       return $sip_out->{service} . $sip_out->{circulation_status} . $sip_out->{security_marker} . $sip_out->{fee_type} . $sip_out->{datetime} . $sip_out->{due_date} . $sip_out->{title} . $sip_out->{permament_location} . $sip_out->{screen_message} . $sip_out->{print_line} . "\r";
+          if ( $sip_out->{circulation_status} eq '00' and $loan_info->{'z36'} ) { #reposne has loan record
+            if ( $loan_info->{'z36'}->{'z36-bor-status'} eq $transfer_patron ) { #in transit loan
+               $sip_out->{circulation_status}='10';}
+            else { #loaned
+               $sip_out->{circulation_status}='04';
+               if ( $loan_info->{'z36'}->{'z36-due-date'} ) {
+                  my $dd=$loan_info->{'z36'}->{'z36-due-date'};
+                  $sip_out->{due_date} = 'AH'.substr($dd,6,4).substr($dd,3,2).substr($dd,0,2).'|';
+                  }
+               }
+             }
+          else { $sip_out->{'circulation_status'}='03'; } #available
+          $sip_out->{permament_location} = 'AQ'.$item_info->{'z30'}->{'z30-collection'}.'|' if ( $item_info->{'z30'}->{'z30-collection'} ) ;
+          $sip_out->{title} = 'AJ'.$sip_out->{title}.'|' if $sip_out->{title};
        }
+       #construct and return SIP response
+       $sip_out->{datetime} = strftime "%Y%m%d    %H%M%S", localtime;
+
+       if ( $sip_out->{'circulation_status'} eq '01') {#chyba 
+          return $sip_out->{service} . $sip_out->{circulation_status} . $sip_out->{security_marker} . $sip_out->{fee_type} . $sip_out->{datetime} . $sip_out->{barcode} ; }
+       else {
+          return $sip_out->{service} . $sip_out->{circulation_status} . $sip_out->{security_marker} . $sip_out->{fee_type} . $sip_out->{datetime} . $sip_out->{due_date} . $sip_out->{barcode} . $sip_out->{title} . $sip_out->{permament_location} . $sip_out->{screen_message} . $sip_out->{print_line} . "\r";}
+       
       }
    else { $is_error="Barcode not found in SIP2 request: $x"; exceptionError($is_error); }
    }
@@ -261,7 +358,14 @@ sub ACSstatus {
    $sip_out->{'retries-allowed'}='000'; #3 chars
    $sip_out->{datetime} = strftime "%Y%m%d    %H%M%S", localtime; #18 chars
    $sip_out->{'protocol-version'} = '2.00'; #4 chars x.xx
-   return $sip_out->{service} . $sip_out->{'online-status'} . $sip_out->{'checkin-ok'} . $sip_out->{'checkout-ok'} . $sip_out->{'acs-renewal-policy'} . $sip_out->{'status-update-ok'} . $sip_out->{'offline-ok'} . $sip_out->{'timeout-period'} . $sip_out->{'retries-allowed'} . $sip_out->{datetime} . $sip_out->{'protocol-version'} . "\r";
+   $sip_out->{'AO'} = ''; #Institution ID (leave empty if not used), variable length
+   $sip_out->{'BX'} = 'NNNNYNNNNNYNNNNN'; #Information for SC, which messages are currently supported by ASC
+                                          #for currentl available messages 17/18 (item info), position 10 (starting from zero) has been changed to Y
+                                          #    and position 4 also to Y  (SC/ASC status]
+                                          #When other services will be added to this script, they should be also added to this response
+
+   return $sip_out->{service} . $sip_out->{'online-status'} . $sip_out->{'checkin-ok'} . $sip_out->{'checkout-ok'} . $sip_out->{'acs-renewal-policy'} . $sip_out->{'status-update-ok'} . $sip_out->{'offline-ok'} . $sip_out->{'timeout-period'} . $sip_out->{'retries-allowed'} . $sip_out->{datetime} . $sip_out->{'protocol-version'} . 'AO' . $sip_out->{'AO'} . '|BX' . $sip_out->{'BX'} . "|\r";
+
    }
 
 
@@ -313,6 +417,7 @@ sub callXserver {
 #  made by solution here https://stackify.dev/521156-sip2-checksum-calculation-in-javascript 
 #   parameter: ACS response
 #   returns: counted checksum
+#   WARNING!  Not completed yet, returned checksum is not correct, do not use checksum for SIP requests :-!
 sub countChecksum {
    my ($m)=@_;
    my $checksum_int = 0;
@@ -371,6 +476,7 @@ sub exceptionError {
    my ($error_text)=@_;
    $now=strftime "%Y%m%d-%H:%M:%S", localtime;
    print LOGFILE "Error - $now : $error_text (SIP request cannot be processed)\n\n";
+   print  "Error - $now : $error_text (SIP request cannot be processed)\n\n"; #DEBUG
    open(MAIL, "|/usr/sbin/sendmail -t");
    print MAIL "To: ".$admin_mail."\n";
    print MAIL 'From: aleph@alois.osu.cz'."\n";
@@ -378,6 +484,7 @@ sub exceptionError {
    print MAIL "$error_text\n";
    print MAIL "$now\n";
    close(MAIL);
-   return 1;
+   #return 1;
    }
 
+`        
