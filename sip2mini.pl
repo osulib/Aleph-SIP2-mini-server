@@ -15,8 +15,25 @@
 #
 #To run on background with stderr redirect to log file run:
 #	nohup sip2mini.pl '2>&1' &
+#For regular startup on boot, add following line to crontab:
+#  @reboot exec /exlibris/product/bin/perl/exlibris/aleph/matyas/sip2/sip2mini.pl 2>&1 &
 #
 #
+#Tip for regular check if daemon is running (if you use some shell script for regular check of Aleph processes):
+#  set sip_port='5330'
+#  set sip_script='/{{PATH_TO_SCRIPT}/sip2mini.pl'
+#if ( `netstat -anp | grep $sip_port -c | bc` < 1 ) then
+#   #spust ho znova
+#   nohup "$sip_script" 2>&1 &
+#   #mail alert
+#   printf "Skript SIP2MINI pro RFID branu nebezi - $sip_script\n\nPokousim se ho spustit znova, vysledek (na portu $sip_port) je:\n"> /tmp/konroly.mat.sip2
+#   netstat -anp | grep $sip_port >> /tmp/konroly.mat.sip2
+#   cat /tmp/konroly.mat.sip2 | Mail -s "Skript SIP2MINI pro RFID branu nebezi - $sip_script" $email
+#   rm -f /tmp/konroly.mat.sip2
+#endif
+
+
+
 #Requirements:	Perl from Aleph distribution, without extra modules
 #		X-Server Aleph: following API services must be granted to general WWW-X user to access in your ADM base: ill-item-by-bc, ill-get-doc-short 
 #											lll-loan-info is also used, but protected by password set below
