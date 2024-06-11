@@ -42,6 +42,12 @@
 ##
 #
 #
+#RC1 20240605 pokud zadost prijde z nezname IP adresy - $new_socket->peerhost je prazdne, tak poslani odpovedi       $new_socket->send("$sip_response_bytes") zrejme skonci chybou
+#dle lou ve studovne s aplikaci RFIDGateway od Tritia pozadavek vubec nesel odtamtud, jde ale dle szntaxe o bezny SIP2 request
+#Solution: pokud je ip volani neznama, skoncit chybou, poslat mail alert a neodpovidat (jinak to spadne)
+#
+#RC2 20240611 pridano logovani kazdou minutu, at je zrejme, kdy daemn bezel
+
 
 use strict;
 use warnings;
@@ -125,7 +131,15 @@ my $full_message='';
 
 #infinte loop 
 while(1) {
-#if ( $new_socket ) {print "connected ".$new_socket->connected ."\n";} #TODO DEBUG
+
+   #RC2
+   my $current_time4log = strftime "%Y%m%d-%H:%M", localtime;
+   if ( $current_time4log ne $last_time4log ) {
+      print LOGFILE "$current_time4log daemon is running\n";
+      $last_time4log=$current_time4log;
+      }
+   #RC2 end
+
    unless ($new_socket) { #new connection
       $new_socket = $socket->accept();  
       }
@@ -139,9 +153,14 @@ while(1) {
 
 
    my $sip_response='no_response';
-my $client_address = $new_socket->peerhost() ? $new_socket->peerhost() : 'unknown_host' ;
-my $client_port = $new_socket->peerport() ? $new_socket->peerport() : 'unknown_port';
-print "connection from $client_address:$client_port\n";
+   my $client_address = $new_socket->peerhost() ? $new_socket->peerhost() : 'unknown_host' ;
+   my $client_port = $new_socket->peerport() ? $new_socket->peerport() : 'unknown_port';
+
+   #RC1
+   if ( $client_address eq 'unknown_host' ) { exceptionError('Request come from unknown host (IP), cannot be processed, no answer to the request. The request text was: '.$message_from_client); next; }
+   if ( $client_port eq 'unknown_portt' ) { exceptionError('Request from host '.$client_address.' has unknown calling port. Cannot be processed, no answer to the request. The request text was: '.$message_from_client); next; }
+
+   print "connection from $client_address:$client_port\n";
    #20220620
    if (! $new_socket) {
       redo if $!{ECONNREFUSED};  # Error from a previous UDP send
